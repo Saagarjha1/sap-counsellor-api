@@ -1,0 +1,10 @@
+# Exclude Google credentials / sensitive data
+service_account.json
+*.json
+
+# Exclude virtual environments & Python runtime files
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
