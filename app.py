@@ -3,6 +3,7 @@ from flask_cors import CORS
 from datetime import datetime
 import os
 import re
+import json
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -12,32 +13,56 @@ CORS(app)
 
 # ==================== GOOGLE SHEETS SETUP ====================
 SHEET_ID = "1BNItqKaexdv5zRWutXZvIaG9SpsYK6_TKL9LVVI8DGI"
+SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 worksheet = None
 
-try:
-    if not os.path.exists("service_account.json"):
-        print("❌ service_account.json NOT FOUND!")
-    else:
-        SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file("service_account.json", scopes=SCOPES)
+def init_google_sheets():
+    """Attempt connection across Render secret files, environment variables, or local files."""
+    global worksheet
+    render_secret_path = "/etc/secrets/service_account.json"
+    local_secret_path = "service_account.json"
+    creds_json_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+
+    try:
+        creds = None
+        # 1. Check Render Secret File mount path
+        if os.path.exists(render_secret_path):
+            creds = Credentials.from_service_account_file(render_secret_path, scopes=SCOPES)
+            print(f"✅ Using secret file at {render_secret_path}")
+        # 2. Check JSON Environment Variable string
+        elif creds_json_env:
+            info = json.loads(creds_json_env)
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+            print("✅ Using credentials from GOOGLE_SERVICE_ACCOUNT_JSON env var")
+        # 3. Check Local directory (Development mode)
+        elif os.path.exists(local_secret_path):
+            creds = Credentials.from_service_account_file(local_secret_path, scopes=SCOPES)
+            print(f"✅ Using local credentials file at {local_secret_path}")
+        else:
+            print("❌ Connection Error: No service account credentials found.")
+            return False
+
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(SHEET_ID)
         worksheet = sh.sheet1
         print("✅ SUCCESS: Connected to Google Sheet!")
-except Exception as e:
-    print(f"❌ Connection Error: {e}")
-
-# Ensure Headers exist in the Sheet
-if worksheet:
-    try:
+        
+        # Ensure Headers exist in the Sheet
         headers = ["Timestamp", "Name", "Mobile", "Email", "City", "Qualification",
                    "Specialization", "Status", "Experience", "Interest", "LearningMode",
                    "Batch", "StartTime", "SAPModule", "LeadCategory"]
         if len(worksheet.get_all_values()) == 0:
             worksheet.append_row(headers)
             print("✅ Headers created")
+        return True
+
     except Exception as e:
-        print(f"⚠️ Header check failed: {e}")
+        print(f"❌ Connection Error: {e}")
+        worksheet = None
+        return False
+
+# Initial connection attempt at startup
+init_google_sheets()
 
 # ==================== SELECTION DATA ====================
 QUALIFICATIONS = ["12th Pass", "Diploma", "B.Com", "M.Com", "BBA", "MBA", "BCA", "MCA", "B.Tech / BE", "M.Tech", "Other"]
@@ -100,9 +125,13 @@ def lead_category(data):
     return "COLD ⚪"
 
 def save_lead(data, module, category):
+    global worksheet
     if not worksheet:
-        print("⚠️ Sheet not connected - Lead not saved")
-        return
+        # Retry connection if initial server startup failed
+        if not init_google_sheets():
+            print("⚠️ Sheet not connected - Lead not saved")
+            return
+
     row = [
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         data.get("name", ""), data.get("mobile", ""), data.get("email", ""),
@@ -243,4 +272,5 @@ Our counselor will contact you soon. Thank you! 🚀"""
     }), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
