@@ -4,7 +4,6 @@ from datetime import datetime
 import os
 import re
 import json
-import base64
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -14,34 +13,41 @@ CORS(app)
 
 # ==================== GOOGLE SHEETS SETUP ====================
 SHEET_ID = "1BNItqKaexdv5zRWutXZvIaG9SpsYK6_TKL9LVVI8DGI"
-worksheet = None
+SECRET_FILE_PATH = "/etc/secrets/gcp_key.json"
 
 def get_gspread_worksheet():
-    """Decodes Base64 environment variable and returns the Google Sheet worksheet."""
-    raw_b64 = os.environ.get("GCP_SA_KEY_BASE64")
+    """Reads GCP Service Account credentials safely without byte-decoding errors."""
+    scopes = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
     
-    if not raw_b64:
-        print("⚠️ Environment variable 'GCP_SA_KEY_BASE64' is not set.")
-        return None
-    
-    try:
-        # Decode Base64 string back into JSON dictionary
-        json_bytes = base64.b64decode(raw_b64)
-        key_dict = json.loads(json_bytes.decode("utf-8"))
+    # 1. Primary Method: Load directly from Render Secret File
+    if os.path.exists(SECRET_FILE_PATH):
+        try:
+            credentials = Credentials.from_service_account_file(SECRET_FILE_PATH, scopes=scopes)
+            gc = gspread.authorize(credentials)
+            sh = gc.open_by_key(SHEET_ID)
+            print("✅ SUCCESS: Connected to Google Sheet via Secret File!")
+            return sh.sheet1
+        except Exception as e:
+            print(f"❌ Error loading Secret File ({SECRET_FILE_PATH}): {e}")
 
-        scopes = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ]
+    # 2. Fallback: Try reading raw JSON string from environment variable (GCP_SA_KEY)
+    raw_env_json = os.environ.get("GCP_SA_KEY")
+    if raw_env_json and raw_env_json.strip().startswith("{"):
+        try:
+            key_dict = json.loads(raw_env_json)
+            credentials = Credentials.from_service_account_info(key_dict, scopes=scopes)
+            gc = gspread.authorize(credentials)
+            sh = gc.open_by_key(SHEET_ID)
+            print("✅ SUCCESS: Connected to Google Sheet via GCP_SA_KEY Env Var!")
+            return sh.sheet1
+        except Exception as e:
+            print(f"❌ Error parsing GCP_SA_KEY Env Var: {e}")
 
-        credentials = Credentials.from_service_account_info(key_dict, scopes=scopes)
-        gc = gspread.authorize(credentials)
-        sh = gc.open_by_key(SHEET_ID)
-        print("✅ SUCCESS: Connected to Google Sheet via Base64 Key!")
-        return sh.sheet1
-    except Exception as e:
-        print(f"❌ Connection Error: {e}")
-        return None
+    print("⚠️ Connection Warning: Google Sheet connection failed or secret file not found.")
+    return None
 
 # Initialize worksheet connection
 worksheet = get_gspread_worksheet()
