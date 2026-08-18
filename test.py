@@ -3,6 +3,8 @@ from flask_cors import CORS
 from datetime import datetime
 import os
 import re
+import json
+import base64
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -14,28 +16,47 @@ CORS(app)
 SHEET_ID = "1BNItqKaexdv5zRWutXZvIaG9SpsYK6_TKL9LVVI8DGI"
 worksheet = None
 
-try:
-    if not os.path.exists("service_account.json"):
-        print("❌ service_account.json NOT FOUND!")
-    else:
-        SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_file("service_account.json", scopes=SCOPES)
-        gc = gspread.authorize(creds)
+def get_gspread_worksheet():
+    """Decodes Base64 environment variable and returns the Google Sheet worksheet."""
+    raw_b64 = os.environ.get("GCP_SA_KEY_BASE64")
+    
+    if not raw_b64:
+        print("⚠️ Environment variable 'GCP_SA_KEY_BASE64' is not set.")
+        return None
+    
+    try:
+        # Decode Base64 string back into JSON dictionary
+        json_bytes = base64.b64decode(raw_b64)
+        key_dict = json.loads(json_bytes.decode("utf-8"))
+
+        scopes = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+
+        credentials = Credentials.from_service_account_info(key_dict, scopes=scopes)
+        gc = gspread.authorize(credentials)
         sh = gc.open_by_key(SHEET_ID)
-        worksheet = sh.sheet1
-        print("✅ SUCCESS: Connected to Google Sheet!")
-except Exception as e:
-    print(f"❌ Connection Error: {e}")
+        print("✅ SUCCESS: Connected to Google Sheet via Base64 Key!")
+        return sh.sheet1
+    except Exception as e:
+        print(f"❌ Connection Error: {e}")
+        return None
+
+# Initialize worksheet connection
+worksheet = get_gspread_worksheet()
 
 # Ensure Headers exist in the Sheet
 if worksheet:
     try:
-        headers = ["Timestamp", "Name", "Mobile", "Email", "City", "Qualification",
-                   "Specialization", "Status", "Experience", "Interest", "LearningMode",
-                   "Batch", "StartTime", "SAPModule", "LeadCategory"]
+        headers = [
+            "Timestamp", "Name", "Mobile", "Email", "City", "Qualification",
+            "Specialization", "Status", "Experience", "Interest", "LearningMode",
+            "Batch", "StartTime", "SAPModule", "LeadCategory"
+        ]
         if len(worksheet.get_all_values()) == 0:
             worksheet.append_row(headers)
-            print("✅ Headers created")
+            print("✅ Headers created in Google Sheet")
     except Exception as e:
         print(f"⚠️ Header check failed: {e}")
 
@@ -100,9 +121,15 @@ def lead_category(data):
     return "COLD ⚪"
 
 def save_lead(data, module, category):
+    global worksheet
+    if not worksheet:
+        # Re-attempt connection in case startup auth failed
+        worksheet = get_gspread_worksheet()
+
     if not worksheet:
         print("⚠️ Sheet not connected - Lead not saved")
         return
+
     row = [
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         data.get("name", ""), data.get("mobile", ""), data.get("email", ""),
@@ -243,4 +270,5 @@ Our counselor will contact you soon. Thank you! 🚀"""
     }), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
